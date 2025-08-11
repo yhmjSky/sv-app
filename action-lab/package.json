@@ -1,0 +1,16 @@
+{
+  "name": "create-dynamic-binding-lab",
+  "version": "1.0.0",
+  "description": "GitLab/CLI 专用动态绑定脚本",
+  "main": "build/index.js",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@iarna/toml": "^2.2.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.9",
+    "typescript": "^5.3.3"
+  }
+}

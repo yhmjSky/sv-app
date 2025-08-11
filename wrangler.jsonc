@@ -1,0 +1,38 @@
+/**
+ * For more details on how to configure Wrangler, refer to:
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "sv-app",
+	"compatibility_date": "2024-11-11",
+	"compatibility_flags": ["nodejs_compat"],
+	"pages_build_output_dir": ".svelte-kit/cloudflare",
+	"observability": {
+		"enabled": true
+	},
+	"d1_databases": [
+		{
+			"binding": "d1_2507",
+			"database_name": "d1_2507",
+			"database_id": "7c692a4d-ce47-4b49-83ec-b39c66a0e7ba",
+			"migrations_dir": "drizzle"
+		},
+		{
+			"binding": "d1_202501",
+			"database_name": "d1_202501",
+			"database_id": "7c692a4d-ce47-4b49-83ec-b39c66a0e7ba",
+			"migrations_dir": "drizzle"
+		},
+		{
+			"binding": "d1_202508",
+			"database_name": "d1_202508",
+			"database_id": "d7de50e4-e84a-43d1-b57b-b8604ed401d9",
+			"migrations_dir": "drizzle"
+		}
+	],
+	"vars": {
+		"CLOUDFLARE_ACCOUNT_ID": "a0fe00d7b7f1a6b522a2e7f3d909bb6b",
+		"CLOUDFLARE_DATABASE_ID": "7c692a4d-ce47-4b49-83ec-b39c66a0e7ba"
+	}
+}
