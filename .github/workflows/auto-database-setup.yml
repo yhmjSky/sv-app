@@ -1,11 +1,8 @@
 name: Auto Database Setup
 
 on:
-  # 定时触发 - 每月1号 UTC 00:00 (北京时间 08:00)
   schedule:
-    - cron: '0 0 1 * *'
-
-  # 手动触发
+    - cron: '0 0 1 * *' # 每月1号 UTC 00:00
   workflow_dispatch:
     inputs:
       year:
@@ -24,58 +21,21 @@ on:
         default: false
         type: boolean
 
-# 环境变量
 env:
-  NODE_VERSION: '18'
+  NODE_VERSION: '20'
 
-# 权限设置
 permissions:
   contents: write
   issues: write
-  pull-requests: read
 
 jobs:
-  # 环境验证任务
-  validate:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-
-    outputs:
-      env-valid: ${{ steps.validate.outputs.valid }}
-
-    steps:
-      - name: Validate environment variables
-        id: validate
-        run: |
-          echo "🔍 Validating required environment variables..."
-
-          if [ -z "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ]; then
-            echo "❌ CLOUDFLARE_ACCOUNT_ID secret is not set"
-            echo "valid=false" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ]; then
-            echo "❌ CLOUDFLARE_API_TOKEN secret is not set"
-            echo "valid=false" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          echo "✅ All required environment variables are set"
-          echo "valid=true" >> $GITHUB_OUTPUT
-
-  # 主要的数据库设置任务
   setup-database:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: validate
-    if: needs.validate.outputs.env-valid == 'true'
-
+    timeout-minutes: 20
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          # 使用 PAT 以便推送更改
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
 
@@ -83,191 +43,70 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
 
-      - name: Install dependencies
+      - name: Setup environment
         run: |
-          echo "📦 Installing dependencies..."
-          npm ci
-
-      - name: Setup environment variables
-        run: |
-          echo "🔧 Setting up environment variables..."
           echo "CLOUDFLARE_ACCOUNT_ID=${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" >> $GITHUB_ENV
           echo "CLOUDFLARE_API_TOKEN=${{ secrets.CLOUDFLARE_API_TOKEN }}" >> $GITHUB_ENV
-      
-      - name: Run database setup
+
+      - name: Run setup script
         id: setup
+        shell: bash
         run: |
-          echo "🤖 Starting automated database setup..."
-
-          # 构建参数
+          echo "🤖 Running auto-setup..."
           ARGS=""
-
-          if [ -n "${{ github.event.inputs.year }}" ]; then
-            ARGS="$ARGS --year ${{ github.event.inputs.year }}"
-            echo "Using custom year: ${{ github.event.inputs.year }}"
-          fi
-
-          if [ -n "${{ github.event.inputs.month }}" ]; then
-            ARGS="$ARGS --month ${{ github.event.inputs.month }}"
-            echo "Using custom month: ${{ github.event.inputs.month }}"
-          fi
-
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            ARGS="$ARGS --dry-run"
-            echo "Running in dry-run mode"
-          fi
-
-          echo "Setup arguments: $ARGS"
-          echo ""
-
-          # 执行数据库设置
-          if ! node scripts/auto-setup-database.js $ARGS; then
-            echo "❌ Database setup failed"
+          if [ -n "${{ github.event.inputs.year }}" ]; then ARGS="$ARGS --year ${{ github.event.inputs.year }}"; fi
+          if [ -n "${{ github.event.inputs.month }}" ]; then ARGS="$ARGS --month ${{ github.event.inputs.month }}"; fi
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          echo "node scripts/auto-setup-database.js $ARGS"
+          if node scripts/auto-setup-database.js $ARGS; then
+            echo "setup-success=true" >> $GITHUB_OUTPUT
+          else
             echo "setup-success=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-          echo "setup-success=true" >> $GITHUB_OUTPUT
-      
-      - name: Check for changes
-        id: changes
-        if: steps.setup.outputs.setup-success == 'true'
+      - name: Commit and push if changed
+        if: steps.setup.outputs.setup-success == 'true' && github.event.inputs.dry_run != true
+        shell: bash
         run: |
-          echo "🔍 Checking for configuration changes..."
-
-          if git diff --quiet; then
-            echo "ℹ️ No configuration changes detected"
-            echo "has_changes=false" >> $GITHUB_OUTPUT
+          if git diff --quiet -- wrangler.jsonc; then
+            echo "No changes to commit"
           else
-            echo "✅ Configuration changes detected"
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-
-            echo "📋 Changes made:"
-            git diff --name-only
-            echo "📝 Diff summary:"
-            git diff --stat
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git config user.name "github-actions[bot]"
+            git add wrangler.jsonc
+            git commit -m "🤖 Auto-update D1 binding for $(date +'%Y-%m')" -m "Automated database configuration update" || true
+            git push
           fi
 
-      - name: Commit and push changes
-        if: steps.changes.outputs.has_changes == 'true' && github.event.inputs.dry_run != true
-        run: |
-          echo "🔄 Committing configuration changes..."
-
-          # 配置 Git
-          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-
-          # 验证文件存在
-          if [ ! -f wrangler.jsonc ]; then
-            echo "❌ wrangler.jsonc file not found"
-            exit 1
-          fi
-
-          # 提交更改
-          git add wrangler.jsonc
-
-          # 检查是否有内容要提交
-          if git diff --cached --quiet; then
-            echo "⚠️ No changes to commit"
-          else
-            git commit -m "🤖 Auto-update database binding for $(date +'%Y-%m')" \
-                       -m "Automated database configuration update" \
-                       -m "Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-
-            if git push; then
-              echo "✅ Configuration changes committed and pushed successfully"
-            else
-              echo "❌ Failed to push changes"
-              exit 1
-            fi
-          fi
-      
       - name: Create deployment issue
-        if: steps.changes.outputs.has_changes == 'true' && github.event.inputs.dry_run != true
+        if: steps.setup.outputs.setup-success == 'true' && github.event.inputs.dry_run != true
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const date = new Date();
-            const year = github.event.inputs.year || date.getFullYear();
-            const month = github.event.inputs.month || (date.getMonth() + 1);
+            const year = context.payload.inputs?.year || date.getFullYear();
+            const month = context.payload.inputs?.month || (date.getMonth() + 1);
             const yearMonth = `${year}-${String(month).padStart(2, '0')}`;
             const databaseName = `d1_${year}${String(month).padStart(2, '0')}`;
-
             try {
               const issue = await github.rest.issues.create({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 title: `🚀 Deploy database setup for ${yearMonth}`,
-                body: `## 🤖 数据库自动设置完成
-
-            新的数据库配置已自动创建并提交到仓库。
-
-            ### 📋 详情
-            - **数据库名称**: \`${databaseName}\`
-            - **配置文件**: \`wrangler.jsonc\` 已更新
-            - **提交时间**: ${new Date().toISOString()}
-            - **工作流**: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-
-            ### 🚀 下一步操作
-            请手动触发部署流程以应用新的数据库配置：
-
-            1. 检查配置更改是否正确
-            2. 触发部署工作流
-            3. 验证新数据库功能
-
-            ### 🔗 相关链接
-            - [查看最新提交](${{ github.server_url }}/${{ github.repository }}/commits/${{ github.ref_name }})
-            - [部署应用](${{ github.server_url }}/${{ github.repository }}/actions)
-            - [数据库管理](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/wrangler.jsonc)
-
-            ---
-            *此 Issue 由 GitHub Actions 自动创建*`,
+                body: `新的数据库配置已自动创建并提交到仓库。\n\n- 数据库名称: \`${databaseName}\`\n- 配置文件: \`wrangler.jsonc\` 已更新\n- 提交时间: ${new Date().toISOString()}\n\n请手动触发部署流程以应用新的数据库配置。`,
                 labels: ['database', 'auto-setup', 'deployment', 'automation']
               });
-
-              console.log(\`✅ Created deployment issue: #\${issue.data.number}\`);
+              core.info(`Created issue #${issue.data.number}`);
             } catch (error) {
-              console.error('❌ Failed to create issue:', error);
-              // 不要因为创建 Issue 失败而让整个工作流失败
+              core.warning(`Failed to create issue: ${error.message}`);
             }
-      
+
       - name: Summary
         if: always()
         run: |
-          echo "## 🤖 Auto Database Setup Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📊 Execution Details" >> $GITHUB_STEP_SUMMARY
-          echo "- **Trigger**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Dry Run**: ${{ github.event.inputs.dry_run || false }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Year**: ${{ github.event.inputs.year || 'Current' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Month**: ${{ github.event.inputs.month || 'Current' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Setup Success**: ${{ steps.setup.outputs.setup-success || 'false' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Changes Made**: ${{ steps.changes.outputs.has_changes || 'false' }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          echo "### 📋 Results" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ steps.setup.outputs.setup-success }}" = "true" ]; then
-            if [ "${{ steps.changes.outputs.has_changes }}" = "true" ]; then
-              if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-                echo "🔍 **Dry run completed** - No actual changes were made" >> $GITHUB_STEP_SUMMARY
-              else
-                echo "✅ **Database configuration updated successfully!**" >> $GITHUB_STEP_SUMMARY
-                echo "- Configuration file updated" >> $GITHUB_STEP_SUMMARY
-                echo "- Changes committed and pushed" >> $GITHUB_STEP_SUMMARY
-                echo "- Deployment issue created" >> $GITHUB_STEP_SUMMARY
-              fi
-            else
-              echo "ℹ️ **No changes needed** - Database already configured correctly" >> $GITHUB_STEP_SUMMARY
-            fi
-          else
-            echo "❌ **Database setup failed** - Check the logs for details" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🔗 Quick Links" >> $GITHUB_STEP_SUMMARY
-          echo "- [Workflow Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
-          echo "- [Repository](${{ github.server_url }}/${{ github.repository }})" >> $GITHUB_STEP_SUMMARY
-          echo "- [Configuration File](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/wrangler.jsonc)" >> $GITHUB_STEP_SUMMARY
+          echo "## Auto Database Setup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Setup Success: ${{ steps.setup.outputs.setup-success || 'false' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Dry Run: ${{ github.event.inputs.dry_run || false }}" >> $GITHUB_STEP_SUMMARY

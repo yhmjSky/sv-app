@@ -1,301 +1,70 @@
-# GitLab CI/CD 配置文件
-# 自动化数据库设置和部署
+# GitLab CI/CD 配置（精简版）
+# 仅执行自动数据库设置与配置提交，不进行依赖安装与构建
 
 stages:
-  - validate
   - setup
-  - deploy
 
 variables:
-  NODE_VERSION: "18"
-  # 安全设置
+  NODE_VERSION: "20"
   GIT_DEPTH: 1
   GIT_STRATEGY: clone
-  # 缓存设置
-  NPM_CONFIG_CACHE: ".npm"
 
-# 全局缓存配置
-cache:
-  key:
-    files:
-      - package-lock.json
-  paths:
-    - .npm/
-    - node_modules/
-  policy: pull-push
-
-# 环境变量验证任务
-validate-environment:
-  stage: validate
-  image: alpine:latest
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-    - if: $CI_PIPELINE_SOURCE == "web"
-    - if: $CI_PIPELINE_SOURCE == "api"
-  script:
-    - echo "🔍 Validating required environment variables..."
-    - |
-      if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
-        echo "❌ CLOUDFLARE_ACCOUNT_ID is not set"
-        exit 1
-      fi
-    - |
-      if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-        echo "❌ CLOUDFLARE_API_TOKEN is not set"
-        exit 1
-      fi
-    - echo "✅ All required environment variables are set"
-
-# 数据库自动设置任务
-auto-database-setup:
+# 单一作业：按需（schedule/web/api/trigger）执行数据库自动设置
+database-setup:
   stage: setup
   image: node:${NODE_VERSION}
   timeout: 30m
-
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_PIPELINE_SOURCE == "web"
     - if: $CI_PIPELINE_SOURCE == "api"
     - if: $CI_PIPELINE_SOURCE == "trigger"
-
   variables:
-    # 可以通过 GitLab CI/CD 变量覆盖
     SETUP_YEAR: ""
     SETUP_MONTH: ""
     DRY_RUN: "false"
-
-  needs:
-    - validate-environment
-  
   before_script:
-    - echo "🚀 Starting auto database setup..."
+    - echo "🚀 Starting database setup job..."
     - echo "Node.js version:" && node --version
-    - echo "NPM version:" && npm --version
     - echo "Git version:" && git --version
-
-    # 安装依赖
-    - npm ci
-
-    # 设置环境变量
-    - export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID}"
-    - export CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN}"
-
-    # 配置 Git（为后续提交做准备）
-    - git config --global user.email "gitlab-ci@${CI_PROJECT_NAMESPACE}.gitlab.io"
-    - git config --global user.name "GitLab CI/CD"
-
+    # 基本环境变量校验（不依赖 npm 包）
+    - |
+      if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+        echo "❌ CLOUDFLARE_ACCOUNT_ID is not set"; exit 1; fi
+    - |
+      if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+        echo "❌ CLOUDFLARE_API_TOKEN is not set"; exit 1; fi
+    # 配置 Git 身份
+    - git config --global user.email "gitlab-ci@${CI_PROJECT_NAMESPACE}.gitlab.local"
+    - git config --global user.name "GitLab CI"
   script:
     - |
-      echo "🔧 Configuring database setup parameters..."
-
-      # 构建命令参数
-      SETUP_ARGS=""
-
-      if [ -n "$SETUP_YEAR" ]; then
-        SETUP_ARGS="$SETUP_ARGS --year $SETUP_YEAR"
-        echo "Using custom year: $SETUP_YEAR"
-      fi
-
-      if [ -n "$SETUP_MONTH" ]; then
-        SETUP_ARGS="$SETUP_ARGS --month $SETUP_MONTH"
-        echo "Using custom month: $SETUP_MONTH"
-      fi
-
-      if [ "$DRY_RUN" = "true" ]; then
-        SETUP_ARGS="$SETUP_ARGS --dry-run"
-        echo "Running in dry-run mode"
-      fi
-
-      echo "Setup arguments: $SETUP_ARGS"
-      echo ""
-
-      # 执行数据库设置
-      echo "🤖 Running automated database setup..."
-      if ! node scripts/auto-setup-database.js $SETUP_ARGS; then
-        echo "❌ Database setup failed"
-        exit 1
-      fi
-    
-      # 检查是否有配置更改
-      echo "🔍 Checking for configuration changes..."
-      if git diff --quiet; then
-        echo "ℹ️ No configuration changes detected"
-        echo "HAS_CHANGES=false" >> setup.env
-      else
-        echo "✅ Configuration changes detected"
-        echo "HAS_CHANGES=true" >> setup.env
-
-        # 显示更改内容
-        echo "📋 Changes made:"
-        git diff --name-only
-        echo "📝 Diff summary:"
-        git diff --stat
-      fi
-
-  after_script:
-    - |
-      # 处理配置更改和提交
-      if [ -f setup.env ]; then
-        source setup.env
-
-        if [ "$HAS_CHANGES" = "true" ] && [ "$DRY_RUN" != "true" ]; then
-          echo "🔄 Committing configuration changes..."
-
-          # 验证文件存在
-          if [ ! -f wrangler.jsonc ]; then
-            echo "❌ wrangler.jsonc file not found"
-            exit 1
-          fi
-
-          # 提交更改
-          git add wrangler.jsonc
-
-          # 检查是否有内容要提交
-          if git diff --cached --quiet; then
-            echo "⚠️ No changes to commit"
-          else
-            git commit -m "🤖 Auto-update database binding for $(date +'%Y-%m')" \
-                       -m "Automated database configuration update" \
-                       -m "Pipeline: $CI_PIPELINE_URL"
-
-            # 推送更改（使用项目访问令牌）
-            if [ -n "$CI_PUSH_TOKEN" ]; then
-              git remote set-url origin https://gitlab-ci-token:${CI_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git
-            else
-              git remote set-url origin https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git
-            fi
-
-            if git push origin HEAD:${CI_COMMIT_REF_NAME}; then
-              echo "✅ Configuration changes committed and pushed successfully"
-            else
-              echo "❌ Failed to push changes - check repository permissions"
-              exit 1
-            fi
-          fi
-        elif [ "$DRY_RUN" = "true" ]; then
-          echo "🔍 Dry run mode - no changes will be committed"
-        else
-          echo "ℹ️ No configuration changes to commit"
-        fi
-      else
-        echo "⚠️ setup.env file not found"
-      fi
-  
-  artifacts:
-    reports:
-      dotenv: setup.env
-    paths:
-      - wrangler.jsonc
-      - setup.env
-    expire_in: 1 hour
-    when: always
-
-  retry:
-    max: 2
-    when:
-      - runner_system_failure
-      - stuck_or_timeout_failure
-
-# 手动数据库设置任务
-manual-database-setup:
-  stage: setup
-  image: node:${NODE_VERSION}
-  timeout: 15m
-
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "web"
-      when: manual
-      allow_failure: true
-    - if: $CI_PIPELINE_SOURCE == "api"
-      when: manual
-      allow_failure: true
-
-  variables:
-    SETUP_YEAR: ""
-    SETUP_MONTH: ""
-    DRY_RUN: "true"  # 默认为干运行模式
-
-  needs:
-    - validate-environment
-
-  before_script:
-    - echo "🔍 Manual database setup (dry-run mode)"
-    - echo "To perform actual setup, set DRY_RUN=false in pipeline variables"
-    - npm ci
-    - export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID}"
-    - export CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN}"
-
-  script:
-    - |
-      ARGS="--dry-run"
-      if [ -n "$SETUP_YEAR" ]; then
-        ARGS="$ARGS --year $SETUP_YEAR"
-      fi
-      if [ -n "$SETUP_MONTH" ]; then
-        ARGS="$ARGS --month $SETUP_MONTH"
-      fi
-
-      echo "Running: node scripts/auto-setup-database.js $ARGS"
+      echo "🔧 Building arguments..."
+      ARGS=""
+      if [ -n "$SETUP_YEAR" ]; then ARGS="$ARGS --year $SETUP_YEAR"; fi
+      if [ -n "$SETUP_MONTH" ]; then ARGS="$ARGS --month $SETUP_MONTH"; fi
+      if [ "$DRY_RUN" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+      echo "→ node scripts/auto-setup-database.js $ARGS"
       node scripts/auto-setup-database.js $ARGS
-
-# 部署任务（可选）
-deploy:
-  stage: deploy
-  image: node:${NODE_VERSION}
-  timeout: 20m
-
-  rules:
-    - if: $CI_COMMIT_MESSAGE =~ /Auto-update database binding/
-      when: manual
-      allow_failure: true
-    - if: $CI_PIPELINE_SOURCE == "web"
-      when: manual
-      allow_failure: true
-
-  needs:
-    - job: auto-database-setup
-      artifacts: true
-
-  before_script:
-    - echo "🚀 Starting deployment process..."
-    - npm ci
-    - echo "📦 Building application..."
-    - npm run build
-
-  script:
     - |
-      echo "🚀 Deploying application..."
-      echo "📋 Deployment configuration:"
-      echo "  - Environment: ${CI_ENVIRONMENT_NAME:-production}"
-      echo "  - Commit: ${CI_COMMIT_SHORT_SHA}"
-      echo "  - Branch: ${CI_COMMIT_REF_NAME}"
-
-      # 检查是否有数据库配置更新
-      if [ -f setup.env ]; then
-        source setup.env
-        if [ "$HAS_CHANGES" = "true" ]; then
-          echo "✅ Database configuration was updated in this pipeline"
+      echo "🔍 Checking for wrangler.jsonc changes..."
+      if git diff --quiet -- wrangler.jsonc; then
+        echo "ℹ️ No changes in wrangler.jsonc"; echo "HAS_CHANGES=false" > setup.env;
+      else
+        echo "✅ Configuration changes detected"; echo "HAS_CHANGES=true" > setup.env;
+        git add wrangler.jsonc
+        if [ "$DRY_RUN" = "true" ]; then
+          echo "🔍 Dry run mode - skip commit";
+        else
+          git commit -m "🤖 Auto-update D1 binding for $(date +'%Y-%m')" -m "Automated database configuration update"
+          # 使用 Job Token 推送
+          if [ -n "$CI_SERVER_HOST" ] && [ -n "$CI_PROJECT_PATH" ]; then
+            git remote set-url origin https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git
+          fi
+          git push origin HEAD:${CI_COMMIT_REF_NAME} || (echo "❌ Failed to push changes" && exit 1)
         fi
       fi
-
-      # 部署命令（需要根据实际情况修改）
-      echo "🔧 Add your deployment commands here:"
-      echo "  npm run deploy"
-      echo "  或者其他部署脚本"
-
-      # 示例部署命令（取消注释并修改）
-      # npm run deploy
-
   after_script:
-    - echo "📊 Deployment completed"
-    - echo "🔗 Application URL:" ${CI_ENVIRONMENT_URL:-"Not configured"}
-
-# 定时任务配置说明
-# 在 GitLab 项目中设置定时管道:
-# 1. 进入项目 -> CI/CD -> Schedules
-# 2. 创建新的定时任务
-# 3. 设置 Cron 表达式: 0 0 1 * * (每月1号 UTC 00:00)
-# 4. 设置变量:
-#    - CLOUDFLARE_ACCOUNT_ID: 你的 Cloudflare 账户 ID
-#    - CLOUDFLARE_API_TOKEN: 你的 Cloudflare API 令牌
-#    - DRY_RUN: false (实际执行，不是干运行)
+    - cat setup.env || true
+  # 无缓存、无 artifacts，避免 Runner/Coordinator 500 错误
+  cache: {}
