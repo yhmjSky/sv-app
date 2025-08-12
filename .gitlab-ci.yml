@@ -23,6 +23,8 @@ database-setup:
     SETUP_YEAR: ""
     SETUP_MONTH: ""
     DRY_RUN: "false"
+    # 可选：自定义 GitLab HTTP 基础地址（包含协议和端口），例如 http://192.168.8.210:6080
+    GITLAB_HTTP_URL: ""
   before_script:
     - echo "🚀 Starting database setup job..."
     - echo "Node.js version:" && node --version
@@ -56,12 +58,25 @@ database-setup:
         if [ "$DRY_RUN" = "true" ]; then
           echo "🔍 Dry run mode - skip commit";
         else
-          git commit -m "🤖 Auto-update D1 binding for $(date +'%Y-%m')" -m "Automated database configuration update"
-          # 使用 Job Token 推送
-          if [ -n "$CI_SERVER_HOST" ] && [ -n "$CI_PROJECT_PATH" ]; then
-            git remote set-url origin https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git
+          git commit -m "🤖 Auto-update D1 binding for $(date +'%Y-%m')" -m "Automated database configuration update" || echo "⚠️ Nothing to commit"
+
+          # 推送更改（优先使用 Personal/Project Access Token: GITLAB_TOKEN），失败不使作业失败
+          # 兼容自签名或非 443 端口，通过 HTTP 避免 TLS 问题
+          BASE_URL="$GITLAB_HTTP_URL"
+          if [ -z "$BASE_URL" ]; then
+            # 如未显式指定，则默认使用 CI_SERVER_HOST 的 6080 端口（按你的环境示例）
+            BASE_URL="http://${CI_SERVER_HOST}:6080"
           fi
-          git push origin HEAD:${CI_COMMIT_REF_NAME} || (echo "❌ Failed to push changes" && exit 1)
+
+          REPO_PATH="${CI_PROJECT_PATH}.git"
+
+          if [ -n "$GITLAB_TOKEN" ]; then
+            echo "🔐 Using GITLAB_TOKEN (oauth2) to push"
+            git push "http://oauth2:${GITLAB_TOKEN}@${BASE_URL#http://}/${REPO_PATH}" HEAD:${CI_COMMIT_REF_NAME} -o ci.skip || echo "⚠️ 推送失败（oauth2），可能无权限或网络异常"
+          else
+            echo "🔐 Using CI_JOB_TOKEN to push"
+            git push "http://gitlab-ci-token:${CI_JOB_TOKEN}@${BASE_URL#http://}/${REPO_PATH}" HEAD:${CI_COMMIT_REF_NAME} -o ci.skip || echo "⚠️ 推送失败（CI_JOB_TOKEN），可能无权限或网络异常"
+          fi
         fi
       fi
   after_script:
