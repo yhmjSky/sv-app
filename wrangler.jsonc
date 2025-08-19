@@ -13,26 +13,14 @@
 	},
 	"d1_databases": [
 		{
-			"binding": "d1_2507",
-			"database_name": "d1_2507",
-			"database_id": "7c692a4d-ce47-4b49-83ec-b39c66a0e7ba",
-			"migrations_dir": "drizzle"
-		},
-		{
-			"binding": "d1_202501",
-			"database_name": "d1_202501",
-			"database_id": "7c692a4d-ce47-4b49-83ec-b39c66a0e7ba",
-			"migrations_dir": "drizzle"
-		},
-		{
 			"binding": "d1_202508",
 			"database_name": "d1_202508",
-			"database_id": "d7de50e4-e84a-43d1-b57b-b8604ed401d9",
+			"database_id": "2ffe880d-6586-4590-8ed1-4c3d173cef36",
 			"migrations_dir": "drizzle"
 		}
 	],
 	"vars": {
-		"CLOUDFLARE_ACCOUNT_ID": "a0fe00d7b7f1a6b522a2e7f3d909bb6b",
+		"CLOUDFLARE_ACCOUNT_ID": "f785052107c721eaade341bb8c675fe0",
 		"CLOUDFLARE_DATABASE_ID": "7c692a4d-ce47-4b49-83ec-b39c66a0e7ba"
 	}
 }
